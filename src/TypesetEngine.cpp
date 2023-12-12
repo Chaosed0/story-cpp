@@ -53,8 +53,9 @@ namespace typeset
 
 	LinebreakResult Paragraph::BuildLinebreaks(float maxLineSize, float fontSize)
 	{
+		float fontSizeMultiplier = fontSize / font->baseSize;
 		int glyphIndex = font->GetGlyphIndex('-');
-		float hyphenWidth = font->glyphs[glyphIndex].advanceX;
+		float hyphenWidth = font->glyphs[glyphIndex].advanceX * fontSizeMultiplier;
 
 		float tolerance = 1;
 
@@ -105,9 +106,6 @@ namespace typeset
 					std::string hyphens(hyphensBuffer.data());
 					int lastHyphenIndex = -1;
 
-					std::cout << str.substr(wordStart, hyphWordLength) << std::endl;
-					std::cout << hyphens << std::endl;
-
 					// Split word into hyphenated segments and add as words
 					for (int i = 0; i < hyphens.size(); i++)
 					{
@@ -122,6 +120,7 @@ namespace typeset
 
 							Word word{ wordStart + lastHyphenIndex + 1, wordStart + i, wordWidth, i < hyphens.size() - 1};
 							result.words.push_back(word);
+							std::string beh = str.substr(word.start, word.end - word.start + 1);
 
 							float totalWidth = cumulativeWordDatas.empty() ? wordWidth : cumulativeWordDatas.back().totalWidth + wordWidth;
 							int newGlueItem = lastHyphenIndex == -1;
@@ -234,7 +233,7 @@ namespace typeset
 					// Errorr!
 				}
 
-				float charWidth = font->glyphs[glyphIndex].advanceX * (fontSize / font->baseSize);
+				float charWidth = font->glyphs[glyphIndex].advanceX * fontSizeMultiplier;
 				float newWordWidth = cumulativeCharWidths.size() > 0 ? cumulativeCharWidths.back() + charWidth : charWidth;
 				cumulativeCharWidths.push_back(newWordWidth);
 			}
@@ -250,6 +249,18 @@ namespace typeset
 			{
 				glueItemCount = glueItemCount - cumulativeWordDatas[tail->parent->index].glueItemCount;
 				wordWidth = wordWidth - cumulativeWordDatas[tail->parent->index].totalWidth;
+
+				if (!tail->parent->softHyphen)
+				{
+					// If the parent ends with a non-hyphen, discard the glue item at the end of its line
+					glueItemCount--;
+				}
+			}
+
+			// If we end with a hyphen, add the hyphen width to the total line width
+			if (tail->softHyphen)
+			{
+				wordWidth += hyphenWidth;
 			}
 
 			result.linebreaks.push_back(LinebreakLocation{ linebreakIndex, glueItemCount, wordWidth });

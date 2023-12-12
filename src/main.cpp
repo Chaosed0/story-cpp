@@ -119,7 +119,7 @@ int main()
 		int currentLine = 0;
 		int wordInLine = 0;
 		float currentLineWidth = 0;
-		float lineHeight = 20;
+		float lineHeight = fontSize * 1.2f;
 
 		for (int i = 0; i < result.words.size(); i++)
 		{
@@ -138,6 +138,8 @@ int main()
 			if (currentLine < result.linebreaks.size() &&
 				i == result.linebreaks[currentLine].wordIndex)
 			{
+				std::cout << "Linebreak on line " << currentLine << " width " << currentLineWidth + word.wordWidth << " glue count " << result.linebreaks[currentLine].glueItemCount << " word width " << result.linebreaks[currentLine].wordWidth << std::endl;
+
 				currentLine++;
 				wordInLine = 0;
 				currentLineWidth = 0;
@@ -148,16 +150,15 @@ int main()
 
 				if (!word.softHyphen)
 				{
-					float normalSpaceSize = fontSize / 3.;
+					float spaceSize = fontSize / 3.;
 
-					if (currentLine >= result.linebreaks.size() - 1)
+					if (currentLine < result.linebreaks.size() - 1)
 					{
-						currentLineWidth += normalSpaceSize;
+						// Not the last line, so justify
+						spaceSize = (textWidth - result.linebreaks[currentLine].wordWidth) / (float)result.linebreaks[currentLine].glueItemCount;
 					}
-					else
-					{
-						currentLineWidth += (textWidth - result.linebreaks[currentLine].wordWidth) / (float)result.linebreaks[currentLine].glueItemCount;
-					}
+
+					currentLineWidth += spaceSize;
 				}
 
 				wordInLine++;
