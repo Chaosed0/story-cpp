@@ -32,13 +32,12 @@ namespace typeset
 		std::vector<LinebreakLocation> linebreaks;
 	};
 
-	class Paragraph
+	class LinebreakBuilder
 	{
 	public:
-		Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict);
-		LinebreakResult BuildLinebreaks(float maxLineSize, float fontSize);
+		LinebreakBuilder(std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict);
+		LinebreakResult BuildResult(const std::string& str, float maxLineSize, float fontSize);
 	private:
-		std::string str;
 		std::shared_ptr<raylib::Font> font;
 		std::shared_ptr<HyphenDict> hyphenDict;
 	};

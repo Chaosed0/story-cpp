@@ -38,9 +38,8 @@ namespace typeset
 		return str.substr(first, (last - first + 1));
 	}
 
-	Paragraph::Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict)
+	LinebreakBuilder::LinebreakBuilder(std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict)
 	{
-		this->str = trim(str);
 		this->font = font;
 		this->hyphenDict = hyphenDict;
 	}
@@ -51,8 +50,9 @@ namespace typeset
 		int glueItemCount;
 	};
 
-	LinebreakResult Paragraph::BuildLinebreaks(float maxLineSize, float fontSize)
+	LinebreakResult LinebreakBuilder::BuildResult(const std::string& input, float maxLineSize, float fontSize)
 	{
+		std::string str = trim(input);
 		float fontSizeMultiplier = fontSize / font->baseSize;
 		int glyphIndex = font->GetGlyphIndex('-');
 		float hyphenWidth = font->glyphs[glyphIndex].advanceX * fontSizeMultiplier;

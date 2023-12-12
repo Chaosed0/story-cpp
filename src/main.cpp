@@ -1,13 +1,75 @@
 #include <unordered_map>
 #include <optional>
 #include <iostream>
+#include <fstream>
+#include <string>
 
 #include <raylib-cpp/raylib-cpp.hpp>
 #include <lua.hpp>
 #include <rlgl.h>
+#include <ink/story.h>
+#include <ink/runner.h>
+#include <ink/choice.h>
 
 #include "TypesetEngine.hpp"
 #include "hyphen/hyphen.h"
+
+struct Paragraph
+{
+	std::string str;
+	typeset::LinebreakResult result;
+
+	float Draw(std::shared_ptr<raylib::Font> font, raylib::Vector2 origin, raylib::Vector2 size, float fontSize, float lineHeight)
+	{
+		int currentLine = 0;
+		int wordInLine = 0;
+		float currentLineWidth = 0;
+
+		for (int i = 0; i < result.words.size(); i++)
+		{
+			typeset::Word word = result.words[i];
+			raylib::Vector2 wordPosition(origin.x + currentLineWidth, origin.y + currentLine * lineHeight);
+
+			std::string wordStr = str.substr(word.start, word.end - word.start + 1);
+
+			if (word.softHyphen && currentLine < result.linebreaks.size() && i == result.linebreaks[currentLine].wordIndex)
+			{
+				wordStr += "-";
+			}
+
+			font->DrawText(wordStr, wordPosition, raylib::Vector2(0, 0), 0, fontSize, 0);
+
+			if (currentLine < result.linebreaks.size() &&
+				i == result.linebreaks[currentLine].wordIndex)
+			{
+				currentLine++;
+				wordInLine = 0;
+				currentLineWidth = 0;
+			}
+			else
+			{
+				currentLineWidth += word.wordWidth;
+
+				if (!word.softHyphen)
+				{
+					float spaceSize = fontSize / 3.;
+
+					if (currentLine < result.linebreaks.size() - 1)
+					{
+						// Not the last line, so justify
+						spaceSize = (size.x - result.linebreaks[currentLine].wordWidth) / (float)result.linebreaks[currentLine].glueItemCount;
+					}
+
+					currentLineWidth += spaceSize;
+				}
+
+				wordInLine++;
+			}
+		}
+
+		return (currentLine + 1) * lineHeight;
+	}
+};
 
 int main()
 {
@@ -45,6 +107,8 @@ int main()
 
 	float textBoxWidth = 420;
 	float textPadding = 10;
+	float textWidth = textBoxWidth - textPadding * 2;
+	int fontSize = 14;
 
     raylib::Shader shader = LoadShader(0, TextFormat("assets/shader/font/sdf_glsl%i.fs", GLSL_VERSION));
 	raylib::Rectangle rect(playAreaWidth - textBoxWidth, 0, textBoxWidth, playAreaHeight);
@@ -66,39 +130,22 @@ int main()
 
 	std::shared_ptr<HyphenDict> hyphenDict(hnj_hyphen_load("assets/hyph_en_US.dic"));
 
-	/*
-	std::string str = std::string("In olden times when wishing still helped one, there ") +
-		"lived a king whose daughters were all beautiful; and " +
-		"the youngest was so beautiful that the sun itself, which " +
-		"has seen so much, was astonished whenever it shone in " +
-		"her face. Close by the king's castle lay a great dark " +
-		"forest, and under an old lime-tree in the forest was a " +
-		"well, and when the day was very warm, the king's child " +
-		"went out into the forest and sat down by the side of the " +
-		"cool fountain; and when she was bored she took a " +
-		"golden ball, and threw it up on high and caught it; and " +
-		"this ball was her favorite plaything.";
-	*/
+	std::ifstream inkStream;
+	inkStream.open("assets/ink/MageSchool.bin");
+	std::unique_ptr<ink::runtime::story> story(ink::runtime::story::from_file("assets/ink/MageSchool.bin"));
 
-	std::string str = std::string("One of the most important operations necessary when text materials are prepared for ") +
-		"printing or display is the task of dividing long paragraphs into individual lines. When " +
-		"this job has been done well, people will not be aware of the fact that the words they " +
-		"are reading have been arbitrarily broken apart and placed into a somewhat rigid and " +
-		"unnatural rectangular framework; but if the job has been done poorly, readers will " +
-		"be distracted by bad breaks that interrupt their train of thought. In some cases it " +
-		"can be difficult to find suitable breakpoints; for example, the narrow columns often " +
-		"used in newspapers allow for comparatively little flexibility, and the appearance of " +
-		"mathematical formulas in technical text introduces special complications regardless " +
-		"of the column width. But even in comparatively simple cases like the typesetting of " +
-		"an ordinary novel, good line breaking will contribute greatly to the appearance and " +
-		"desirability of the finished product. In fact, some authors actually write better material " +
-		"when they are assured that it will look sufficiently beautiful when it appears in print. " +
-		"lol lmao";
+	ink::runtime::runner runner(story->new_runner());
+	typeset::LinebreakBuilder linebreakBuilder(josefinSans, hyphenDict);
+	std::vector<Paragraph> paragraphs;
+	runner->move_to(ink::hash_string("Fall"));
 
-	float textWidth = textBoxWidth - textPadding * 2;
-	int fontSize = 14;
-	typeset::Paragraph paragraph(str, josefinSans, hyphenDict);
-	typeset::LinebreakResult result = paragraph.BuildLinebreaks(textWidth, fontSize);
+	while (runner->can_continue())
+	{
+		std::string str = runner->getline();
+		typeset::LinebreakResult typeset = linebreakBuilder.BuildResult(str, textWidth, fontSize);
+		Paragraph paragraph{ str, typeset };
+		paragraphs.push_back(paragraph);
+	}
 
 	// game loop
 	while (!WindowShouldClose())
@@ -116,58 +163,18 @@ int main()
 
 		shader.BeginMode();
 
-		int currentLine = 0;
-		int wordInLine = 0;
-		float currentLineWidth = 0;
 		float lineHeight = fontSize * 1.2f;
+		float currentLineStart = 0;
 
-		for (int i = 0; i < result.words.size(); i++)
+		for (int i = 0; i < paragraphs.size(); i++)
 		{
-			typeset::Word word = result.words[i];
-			raylib::Vector2 wordPosition(playAreaWidth - textBoxWidth + textPadding + currentLineWidth, textPadding + currentLine * lineHeight);
-
-			std::string wordStr = str.substr(word.start, word.end - word.start + 1);
-
-			if (word.softHyphen && currentLine < result.linebreaks.size() && i == result.linebreaks[currentLine].wordIndex)
-			{
-				wordStr += "-";
-			}
-
-			josefinSans->DrawText(wordStr, wordPosition, raylib::Vector2(0, 0), 0, 14, 0);
-
-			if (currentLine < result.linebreaks.size() &&
-				i == result.linebreaks[currentLine].wordIndex)
-			{
-				std::cout << "Linebreak on line " << currentLine << " width " << currentLineWidth + word.wordWidth << " glue count " << result.linebreaks[currentLine].glueItemCount << " word width " << result.linebreaks[currentLine].wordWidth << std::endl;
-
-				currentLine++;
-				wordInLine = 0;
-				currentLineWidth = 0;
-			}
-			else
-			{
-				currentLineWidth += word.wordWidth;
-
-				if (!word.softHyphen)
-				{
-					float spaceSize = fontSize / 3.;
-
-					if (currentLine < result.linebreaks.size() - 1)
-					{
-						// Not the last line, so justify
-						spaceSize = (textWidth - result.linebreaks[currentLine].wordWidth) / (float)result.linebreaks[currentLine].glueItemCount;
-					}
-
-					currentLineWidth += spaceSize;
-				}
-
-				wordInLine++;
-			}
+			paragraphs[i].Draw(josefinSans, raylib::Vector2{ playAreaWidth - textBoxWidth + textPadding, textPadding + currentLineStart }, raylib::Vector2{ textWidth, playAreaHeight - textPadding * 2 }, fontSize, fontSize * 1.2f);
+			currentLineStart += lineHeight;
 		}
 
-		DrawTexture(josefinSans->texture, 10, 10, WHITE);
-
 		shader.EndMode();
+
+		DrawTexture(josefinSans->texture, 10, 10, WHITE);
 
 		camera.EndMode();
 		EndDrawing();
