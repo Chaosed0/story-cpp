@@ -7,6 +7,8 @@
 #include <raylib-cpp/raylib-cpp.hpp>
 #include <memory>
 
+#include "hyphen/hyphen.h"
+
 namespace typeset
 {
 	struct Word
@@ -14,21 +16,30 @@ namespace typeset
 		int start;
 		int end;
 		float wordWidth;
+		bool softHyphen;
+	};
+
+	struct LinebreakLocation
+	{
+		int wordIndex;
+		int glueItemCount;
+		float wordWidth;
 	};
 
 	struct LinebreakResult
 	{
 		std::vector<Word> words;
-		std::vector<int> linebreaks;
+		std::vector<LinebreakLocation> linebreaks;
 	};
 
 	class Paragraph
 	{
 	public:
-		Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font);
+		Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict);
 		LinebreakResult BuildLinebreaks(float maxLineSize, float fontSize);
 	private:
 		std::string str;
 		std::shared_ptr<raylib::Font> font;
+		std::shared_ptr<HyphenDict> hyphenDict;
 	};
 }

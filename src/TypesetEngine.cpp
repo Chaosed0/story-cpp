@@ -1,17 +1,21 @@
 #include "TypesetEngine.hpp"
 
+#include <iostream>
+
 namespace typeset
 {
 	struct LinebreakNode
 	{
 		int index;
 		int totalDemerits;
+		bool softHyphen;
 		std::shared_ptr<LinebreakNode> parent;
 
-		LinebreakNode(int index, int totalDemerits, std::shared_ptr<LinebreakNode> parent)
+		LinebreakNode(int index, int totalDemerits, bool softHyphen, std::shared_ptr<LinebreakNode> parent)
 		{
 			this->index = index;
 			this->totalDemerits = totalDemerits;
+			this->softHyphen = softHyphen;
 			this->parent = parent;
 		}
 	};
@@ -34,14 +38,24 @@ namespace typeset
 		return str.substr(first, (last - first + 1));
 	}
 
-	Paragraph::Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font)
+	Paragraph::Paragraph(const std::string& str, std::shared_ptr<raylib::Font> font, std::shared_ptr<HyphenDict> hyphenDict)
 	{
 		this->str = trim(str);
 		this->font = font;
+		this->hyphenDict = hyphenDict;
 	}
+
+	struct CumulativeWordData
+	{
+		float totalWidth;
+		int glueItemCount;
+	};
 
 	LinebreakResult Paragraph::BuildLinebreaks(float maxLineSize, float fontSize)
 	{
+		int glyphIndex = font->GetGlyphIndex('-');
+		float hyphenWidth = font->glyphs[glyphIndex].advanceX;
+
 		float tolerance = 1;
 
 		float normalSpaceWidth = fontSize / 3.f;
@@ -55,15 +69,13 @@ namespace typeset
 		std::shared_ptr<LinebreakNode> head;
 		std::shared_ptr<LinebreakNode> tail;
 		std::vector<std::shared_ptr<LinebreakNode>> activeNodes;
-		std::vector<float> cumulativeLengths;
+		std::vector<CumulativeWordData> cumulativeWordDatas;
 
-		tail = std::make_shared<LinebreakNode>(-1, 0, nullptr);
+		tail = std::make_shared<LinebreakNode>(-1, 0, false, nullptr);
 		head = tail;
 		activeNodes.push_back(tail);
 
-		float wordWidth = 0;
-		float totalLength = 0;
-		int lineGlueCount = 0;
+		std::vector<float> cumulativeCharWidths;
 		int wordStart = -1;
 
 		for (int ci = 0; ci <= str.size(); ci++)
@@ -72,79 +84,139 @@ namespace typeset
 			{
 				if (wordStart >= 0)
 				{
-					Word word{ wordStart, ci - 1, wordWidth };
-					result.words.push_back(word);
+					// Reached glue item, but we have to hyphenate
+					std::vector<Word> newWords;
 
-					totalLength += wordWidth;
-					cumulativeLengths.push_back(totalLength);
+					int hyphWordLength = ci - wordStart;
+					std::vector<char> wordBuffer(hyphWordLength + 1, '\0');
 
-					wordWidth = 0;
-					wordStart = -1;
-
-					float bestActiveNodeScore = -1;
-					std::shared_ptr<LinebreakNode> bestActiveNode;
-
-					for (int nodeIdx = 0; nodeIdx < activeNodes.size(); nodeIdx++)
+					for (int i = 0; i < hyphWordLength; i++)
 					{
-						std::shared_ptr<LinebreakNode> activeNode = activeNodes[nodeIdx];
+						wordBuffer[i] = str[wordStart + i];
+					}
 
-						float candidateLineWidth = cumulativeLengths.back();
+					std::vector<char> hyphensBuffer(hyphWordLength + 5, '\0');
+					char** rep = nullptr;
+					int* pos = nullptr;
+					int* cut = nullptr;
 
-						if (activeNode->index >= 0)
+					// Run hyphenation algorithm
+					hnj_hyphen_hyphenate2(hyphenDict.get(), wordBuffer.data(), hyphWordLength, hyphensBuffer.data(), NULL, &rep, &pos, &cut);
+					std::string hyphens(hyphensBuffer.data());
+					int lastHyphenIndex = -1;
+
+					std::cout << str.substr(wordStart, hyphWordLength) << std::endl;
+					std::cout << hyphens << std::endl;
+
+					// Split word into hyphenated segments and add as words
+					for (int i = 0; i < hyphens.size(); i++)
+					{
+						if (hyphens[i] % 2 != 0 || i == hyphens.size() - 1)
 						{
-							candidateLineWidth = candidateLineWidth - cumulativeLengths[activeNode->index];
-						}
+							float wordWidth = cumulativeCharWidths[i];
 
-						float lineGlueCount = result.words.size() - (activeNode->index + 1) - 1;
-
-						float availableShrink = lineGlueCount * shrinkability;
-						float availableStretch = lineGlueCount * stretchability;
-
-						float normalLineWidth = candidateLineWidth + (lineGlueCount * normalSpaceWidth);
-
-						float adjustment = maxLineSize - normalLineWidth;
-						float adjustmentRatio = (adjustment <= 0 ? adjustment / availableShrink : adjustment / availableStretch);
-
-						if (ci != str.size())
-						{
-							if (adjustmentRatio < -1)
+							if (lastHyphenIndex >= 0)
 							{
-								// Too long and cannot shrink enough, so breakpoint become inactive
-								activeNodes.erase(activeNodes.cbegin() + nodeIdx);
-								nodeIdx--;
-								continue;
+								wordWidth = wordWidth - cumulativeCharWidths[lastHyphenIndex];
 							}
-							else if (adjustmentRatio > 1)
-							{
-								// Too short and cannot stretch enough, so skip this node
-								continue;
-							}
-						}
 
-						// Otherwise, potential break
-						float badness = abs(adjustmentRatio);
-						badness = badness * badness * badness * 100;
+							Word word{ wordStart + lastHyphenIndex + 1, wordStart + i, wordWidth, i < hyphens.size() - 1};
+							result.words.push_back(word);
 
-						// TODO: Consider penalty
-						float penalty = 0;
-						float consecutiveHyphenPenalty = 0;
+							float totalWidth = cumulativeWordDatas.empty() ? wordWidth : cumulativeWordDatas.back().totalWidth + wordWidth;
+							int newGlueItem = lastHyphenIndex == -1;
+							int glueItemCount = cumulativeWordDatas.empty() ? 0 : cumulativeWordDatas.back().glueItemCount + newGlueItem;
 
-						float linePenalty =  10;
-						float demerit = (linePenalty + badness) * (linePenalty + badness) + sgn(penalty) * penalty * penalty + consecutiveHyphenPenalty;
-						float totalDemerit = activeNode->totalDemerits + demerit;
+							cumulativeWordDatas.push_back(CumulativeWordData{ totalWidth, glueItemCount });
+							newWords.push_back(word);
 
-						if (totalDemerit < bestActiveNodeScore)
-						{
-							bestActiveNodeScore = totalDemerit;
-							bestActiveNode = activeNode;
+							lastHyphenIndex = i;
 						}
 					}
 
-					if (bestActiveNode != nullptr)
+					// Reset data for next word
+					wordStart = -1;
+					cumulativeCharWidths.clear();
+
+					// Consider each segment as a potential breakpoint
+					for (int i = 0; i < newWords.size(); i++)
 					{
-						std::shared_ptr<LinebreakNode> newNode = std::make_shared<LinebreakNode>(result.words.size() - 1, bestActiveNodeScore, bestActiveNode);
-						activeNodes.push_back(newNode);
-						tail = newNode;
+						Word word = newWords[i];
+						int curWordLength = word.end - word.start + 1;
+
+						float bestActiveNodeScore = FLT_MAX;
+						std::shared_ptr<LinebreakNode> bestActiveNode;
+
+						for (int nodeIdx = 0; nodeIdx < activeNodes.size(); nodeIdx++)
+						{
+							std::shared_ptr<LinebreakNode> activeNode = activeNodes[nodeIdx];
+
+							CumulativeWordData curCumData = cumulativeWordDatas[cumulativeWordDatas.size() - newWords.size() + i];
+							float candidateLineWidth = curCumData.totalWidth;
+							int glueItemCount = curCumData.glueItemCount;
+
+							if (activeNode->index >= 0)
+							{
+								CumulativeWordData activeCumData = cumulativeWordDatas[activeNode->index];
+								candidateLineWidth = candidateLineWidth - activeCumData.totalWidth;
+								glueItemCount = glueItemCount - activeCumData.glueItemCount;
+							}
+
+							if (word.softHyphen)
+							{
+								candidateLineWidth += hyphenWidth;
+							}
+
+							float availableShrink = glueItemCount * shrinkability;
+							float availableStretch = glueItemCount * stretchability;
+
+							float normalLineWidth = candidateLineWidth + (glueItemCount * normalSpaceWidth);
+
+							float adjustment = maxLineSize - normalLineWidth;
+							float adjustmentRatio = (adjustment <= 0 ? adjustment / availableShrink : adjustment / availableStretch);
+
+							if (ci != str.size())
+							{
+								if (adjustmentRatio < -1)
+								{
+									// Too long and cannot shrink enough, so breakpoint become inactive
+									activeNodes.erase(activeNodes.cbegin() + nodeIdx);
+									nodeIdx--;
+									continue;
+								}
+								else if (adjustmentRatio > 1)
+								{
+									// Too short and cannot stretch enough, so skip this node
+									continue;
+								}
+							}
+
+							// Otherwise, potential break
+							float badness = abs(adjustmentRatio);
+							badness = badness * badness * badness * 100;
+
+							// TODO: Consider penalty
+							float penalty = word.softHyphen ? 10 : 0;
+							float consecutiveHyphenPenalty = activeNode->softHyphen ? 30 : 0;
+
+							float linePenalty = 10;
+							float demerit = (linePenalty + badness) * (linePenalty + badness) + sgn(penalty) * penalty * penalty + consecutiveHyphenPenalty;
+							float totalDemerit = activeNode->totalDemerits + demerit;
+
+							if (totalDemerit < bestActiveNodeScore)
+							{
+								bestActiveNodeScore = totalDemerit;
+								bestActiveNode = activeNode;
+							}
+						}
+
+						if (bestActiveNode != nullptr)
+						{
+							int resultWordsIdx = result.words.size() - newWords.size() + i;
+							std::shared_ptr<LinebreakNode> newNode = std::make_shared<LinebreakNode>(resultWordsIdx, bestActiveNodeScore, word.softHyphen, bestActiveNode);
+							activeNodes.push_back(newNode);
+							tail = newNode;
+						}
 					}
 				}
 			}
@@ -162,16 +234,29 @@ namespace typeset
 					// Errorr!
 				}
 
-				wordWidth += font->glyphs[glyphIndex].advanceX * (fontSize / font->baseSize);
+				float charWidth = font->glyphs[glyphIndex].advanceX * (fontSize / font->baseSize);
+				float newWordWidth = cumulativeCharWidths.size() > 0 ? cumulativeCharWidths.back() + charWidth : charWidth;
+				cumulativeCharWidths.push_back(newWordWidth);
 			}
 		}
 
 		while (tail != head)
 		{
-			result.linebreaks.push_back(tail->index);
+			int linebreakIndex = tail->index;
+			int glueItemCount = cumulativeWordDatas[linebreakIndex].glueItemCount;
+			float wordWidth = cumulativeWordDatas[linebreakIndex].totalWidth;
+
+			if (tail->parent != nullptr && tail->parent->index >= 0)
+			{
+				glueItemCount = glueItemCount - cumulativeWordDatas[tail->parent->index].glueItemCount;
+				wordWidth = wordWidth - cumulativeWordDatas[tail->parent->index].totalWidth;
+			}
+
+			result.linebreaks.push_back(LinebreakLocation{ linebreakIndex, glueItemCount, wordWidth });
 			tail = tail->parent;
 		}
 
+		std::reverse(result.linebreaks.begin(), result.linebreaks.end());
 		return result;
 	}
 }
