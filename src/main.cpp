@@ -1,73 +1,86 @@
+#if defined(_WIN32)           
+	#define NOGDI             // All GDI defines and routines
+	#define NOUSER            // All USER defines and routines
+#endif
+
+#include <Windows.h> // or any library that uses Windows.h
+
+#if defined(_WIN32)           // raylib uses these names as function parameters
+	#undef near
+	#undef far
+	#undef min
+	#undef max
+	#undef PlaySound
+#endif
+
 #include <unordered_map>
 #include <optional>
 #include <iostream>
 #include <fstream>
 #include <string>
 
+#include <spdlog/spdlog.h>
 #include <raylib-cpp/raylib-cpp.hpp>
 #include <lua.hpp>
-#include <rlgl.h>
 #include <ink/story.h>
 #include <ink/runner.h>
 #include <ink/choice.h>
 
-#include "TypesetEngine.hpp"
+#include "Paragraph.hpp"
+#include "LinebreakNode.hpp"
 #include "hyphen/hyphen.h"
 
-struct Paragraph
+struct Story
 {
-	std::string str;
-	typeset::LinebreakResult result;
+	ink::runtime::runner runner;
+	typeset::LinebreakBuilder linebreakBuilder;
+	float maxWidth;
+	float fontSize;
 
-	float Draw(std::shared_ptr<raylib::Font> font, raylib::Vector2 origin, raylib::Vector2 size, float fontSize, float lineHeight)
+	std::vector<Paragraph> paragraphs;
+	std::vector<Paragraph> storyChoices;
+
+	Story(ink::runtime::story* story, std::shared_ptr<raylib::Font> font, std::string hyphenDictFile, float maxWidth, float fontSize)
+		: linebreakBuilder(font, std::shared_ptr<HyphenDict>(hnj_hyphen_load(hyphenDictFile.c_str())))
 	{
-		int currentLine = 0;
-		int wordInLine = 0;
-		float currentLineWidth = 0;
+		this->maxWidth = maxWidth;
+		this->fontSize = fontSize;
 
-		for (int i = 0; i < result.words.size(); i++)
+		runner = story->new_runner();
+		runner->move_to(ink::hash_string("Fall"));
+		Refresh();
+	}
+
+	void Choose(int index)
+	{
+		runner->choose(index);
+		Refresh();
+	}
+
+	void Refresh()
+	{
+		paragraphs.clear();
+		storyChoices.clear();
+
+		while (runner->can_continue())
 		{
-			typeset::Word word = result.words[i];
-			raylib::Vector2 wordPosition(origin.x + currentLineWidth, origin.y + currentLine * lineHeight);
-
-			std::string wordStr = str.substr(word.start, word.end - word.start + 1);
-
-			if (word.softHyphen && currentLine < result.linebreaks.size() && i == result.linebreaks[currentLine].wordIndex)
-			{
-				wordStr += "-";
-			}
-
-			font->DrawText(wordStr, wordPosition, raylib::Vector2(0, 0), 0, fontSize, 0);
-
-			if (currentLine < result.linebreaks.size() &&
-				i == result.linebreaks[currentLine].wordIndex)
-			{
-				currentLine++;
-				wordInLine = 0;
-				currentLineWidth = 0;
-			}
-			else
-			{
-				currentLineWidth += word.wordWidth;
-
-				if (!word.softHyphen)
-				{
-					float spaceSize = fontSize / 3.;
-
-					if (currentLine < result.linebreaks.size() - 1)
-					{
-						// Not the last line, so justify
-						spaceSize = (size.x - result.linebreaks[currentLine].wordWidth) / (float)result.linebreaks[currentLine].glueItemCount;
-					}
-
-					currentLineWidth += spaceSize;
-				}
-
-				wordInLine++;
-			}
+			std::string str = runner->getline();
+			typeset::LinebreakResult typeset = linebreakBuilder.BuildResult(str, maxWidth, fontSize);
+			Paragraph paragraph{ str, typeset };
+			paragraphs.push_back(paragraph);
 		}
 
-		return (currentLine + 1) * lineHeight;
+		if (runner->has_choices())
+		{
+			for (ink::size_t i = 0; i < runner->num_choices(); i++)
+			{
+				const ink::runtime::choice* choice = runner->get_choice(i);
+				std::string str = choice->text();
+				typeset::LinebreakResult typeset = linebreakBuilder.BuildResult(str, maxWidth, fontSize);
+				Paragraph paragraph{ str, typeset };
+				storyChoices.push_back(paragraph);
+			}
+		}
 	}
 };
 
@@ -98,7 +111,7 @@ int main()
 	// set up the window
 	raylib::Window window(windowWidth, windowHeight, "window");
 
-	SetTargetFPS(60);
+	window.SetTargetFPS(60);
 
 	float playAreaWidth = 1080;
 	float playAreaHeight = (float)windowHeight / windowWidth * playAreaWidth;
@@ -108,9 +121,9 @@ int main()
 	float textBoxWidth = 420;
 	float textPadding = 10;
 	float textWidth = textBoxWidth - textPadding * 2;
-	int fontSize = 14;
+	float fontSize = 14;
 
-    raylib::Shader shader = LoadShader(0, TextFormat("assets/shader/font/sdf_glsl%i.fs", GLSL_VERSION));
+    raylib::Shader shader(0, TextFormat("assets/shader/font/sdf_glsl%i.fs", GLSL_VERSION));
 	raylib::Rectangle rect(playAreaWidth - textBoxWidth, 0, textBoxWidth, playAreaHeight);
 
 	int filesize;
@@ -128,35 +141,19 @@ int main()
 
 	UnloadFileData(fileData);
 
-	std::shared_ptr<HyphenDict> hyphenDict(hnj_hyphen_load("assets/hyph_en_US.dic"));
-
 	std::ifstream inkStream;
 	inkStream.open("assets/ink/MageSchool.bin");
-	std::unique_ptr<ink::runtime::story> story(ink::runtime::story::from_file("assets/ink/MageSchool.bin"));
+	ink::runtime::story* inkStory = ink::runtime::story::from_file("assets/ink/MageSchool.bin");
 
-	ink::runtime::runner runner(story->new_runner());
-	typeset::LinebreakBuilder linebreakBuilder(josefinSans, hyphenDict);
-	std::vector<Paragraph> paragraphs;
-	runner->move_to(ink::hash_string("Fall"));
-
-	while (runner->can_continue())
-	{
-		std::string str = runner->getline();
-		typeset::LinebreakResult typeset = linebreakBuilder.BuildResult(str, textWidth, fontSize);
-		Paragraph paragraph{ str, typeset };
-		paragraphs.push_back(paragraph);
-	}
+	Story story(inkStory, josefinSans, "assets/hyph_en_US.dic", textWidth, fontSize);
 
 	// game loop
-	while (!WindowShouldClose())
+	while (!window.ShouldClose())
 	{
-		float deltaTime = GetFrameTime();
+		float deltaTime = window.GetFrameTime();
 
-		// update
-
-		// drawing
-		BeginDrawing();
-		ClearBackground(BLACK);
+		window.BeginDrawing();
+		window.ClearBackground(BLACK);
 		camera.BeginMode();
 
 		rect.Draw(raylib::Color(20, 20, 20));
@@ -165,23 +162,56 @@ int main()
 
 		float lineHeight = fontSize * 1.2f;
 		float currentLineStart = 0;
+		bool isOverChoice = false;
+		raylib::Vector2 mousePos = camera.GetScreenToWorld(raylib::Mouse::GetPosition());
 
-		for (int i = 0; i < paragraphs.size(); i++)
+		for (int i = 0; i < story.paragraphs.size(); i++)
 		{
-			paragraphs[i].Draw(josefinSans, raylib::Vector2{ playAreaWidth - textBoxWidth + textPadding, textPadding + currentLineStart }, raylib::Vector2{ textWidth, playAreaHeight - textPadding * 2 }, fontSize, fontSize * 1.2f);
-			currentLineStart += lineHeight;
+			raylib::Vector2 start = raylib::Vector2{ playAreaWidth - textBoxWidth + textPadding, textPadding + currentLineStart };
+			raylib::Vector2 size = story.paragraphs[i].Draw(josefinSans, start, textWidth, (float)fontSize, lineHeight);
+			currentLineStart += size.y + lineHeight;
+		}
+
+		for (int i = 0; i < story.storyChoices.size(); i++)
+		{
+			raylib::Vector2 start = raylib::Vector2{ playAreaWidth - textBoxWidth + textPadding, textPadding + currentLineStart };
+			raylib::Vector2 size = story.storyChoices[i].Draw(josefinSans, start, textWidth, (float)fontSize, lineHeight, ORANGE);
+			currentLineStart += size.y;
+
+			raylib::Rectangle bounding(start.x, start.y, size.x, size.y);
+
+			spdlog::info("{0} {1} {2} {3} {4} {5} {6}", start.x, start.y, size.x, size.y, mousePos.x, mousePos.y, bounding.CheckCollision(mousePos));
+
+			if (bounding.CheckCollision(mousePos))
+			{
+				isOverChoice = true;
+
+				if (raylib::Mouse::IsButtonPressed(0))
+				{
+					story.Choose(i);
+				}
+			}
 		}
 
 		shader.EndMode();
 
-		DrawTexture(josefinSans->texture, 10, 10, WHITE);
+		DrawTexture(josefinSans->texture, 10, 10, raylib::WHITE);
 
 		camera.EndMode();
-		EndDrawing();
+		window.EndDrawing();
+
+		if (isOverChoice)
+		{
+			raylib::Mouse::SetCursor(MOUSE_CURSOR_POINTING_HAND);
+		}
+		else
+		{
+			raylib::Mouse::SetCursor(MOUSE_CURSOR_DEFAULT);
+		}
 	}
 
 	// cleanup
-	CloseWindow();
+	window.Close();
 	lua_close(luaState);
 	return 0;
 }

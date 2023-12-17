@@ -30,6 +30,7 @@ project ("game")
     link_raylib()
 	
 	link_to("lua54")
+	link_to("spdlog")
 	link_to_include_only("sol")
 	link_to_include_only("raylib-cpp")
 	
