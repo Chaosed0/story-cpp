@@ -194,9 +194,8 @@ namespace typeset
 							float badness = abs(adjustmentRatio);
 							badness = badness * badness * badness * 100;
 
-							// TODO: Consider penalty
-							float penalty = word.softHyphen ? 10.f : 0.f;
-							float consecutiveHyphenPenalty = activeNode->softHyphen ? 30.f : 0.f;
+							float penalty = word.softHyphen ? 100000.f : 0.f;
+							float consecutiveHyphenPenalty = activeNode->softHyphen ? 300000.f : 0.f;
 
 							float linePenalty = 10;
 							float demerit = (linePenalty + badness) * (linePenalty + badness) + sgn(penalty) * penalty * penalty + consecutiveHyphenPenalty;

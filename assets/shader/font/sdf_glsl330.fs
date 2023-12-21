@@ -3,6 +3,7 @@
 // Input vertex attributes (from vertex shader)
 in vec2 fragTexCoord;
 in vec4 fragColor;
+in float fragVertAlpha;
 
 // Input uniform values
 uniform sampler2D texture0;
@@ -22,5 +23,5 @@ void main()
     float alpha = smoothstep(-distanceChangePerFragment, distanceChangePerFragment, distanceFromOutline);
 
     // Calculate final fragment color
-    finalColor = vec4(fragColor.rgb, fragColor.a*alpha);
+    finalColor = vec4(fragColor.rgb, fragColor.a*alpha*fragVertAlpha);
 }
